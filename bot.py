@@ -25,15 +25,64 @@ def run_flask():
 
 # --- ऑटो-वेकअप अलार्म (बोट को हमेशा जगाए रखने के लिए) ---
 def keep_alive_ping():
-    # रेलवे बोट थोड़ा सेट होने के बाद पिंग करना शुरू करेगा
     time.sleep(30)
     while True:
         try:
-            # यह बोट खुद के ही वेब सर्वर को हर 3 मिनट में याद दिलाएगा कि जागते रहो
+            # लोकलहोस्ट को पिंग करके बोट को एक्टिव रखना
             requests.get("http://127.0.0.1:8080/")
             logger.info("Ping sent successfully - Keeping Vansh AI awake!")
         except Exception as e:
             logger.error(f"Ping failed: {e}")
+        time.sleep(180) # हर 3 मिनट में पिंग करेगा
+
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+if TELEGRAM_TOKEN and GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+else:
+    logger.error("API Keys missing in environment variables!")
+
+DEFAULT_INSTRUCTION = "You are Vansh AI, an advanced, witty assistant expert in Godot, 3D modeling, and content strategy."
+
+bot_personalities = {}
+chat_sessions = {}
+MY_TELEGRAM_ID = None 
+
+def is_authorized(update: Update) -> bool:
+    global MY_TELEGRAM_ID
+    user_id = update.effective_user.id
+    if MY_TELEGRAM_ID is None:
+        MY_TELEGRAM_ID = user_id
+        return True
+    return user_id == MY_TELEGRAM_ID
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_authorized(update): return
+    user_id = update.effective_user.id
+    bot_personalities[user_id] = DEFAULT_INSTRUCTION
+    await update.message.reply_text("👋 नमस्ते बॉस! मैं Vansh AI हूँ। मैं तैयार हूँ!")
+
+async def set_personality(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_authorized(update): return
+    user_instruction = " ".join(context.args)
+    if not user_instruction:
+        await update.message.reply_text("निर्देश लिखें (उदा: /set_bot तुम एक कोडर हो)")
+        return
+    bot_personalities[update.effective_user.id] = user_instruction
+    if update.effective_user.id in chat_sessions: del chat_sessions[update.effective_user.id]
+    await update.message.reply_text(f"🎯 Vansh का मूड बदल गया: \"{user_instruction}\"")
+
+async def generate_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_authorized(update): return
+    user_prompt = " ".join(context.args)
+    if not user_prompt:
+        await update.message.reply_text("🎨 प्रॉम्ट लिखें।")
+        return
+    await update.message.reply_text("⏳ Vansh इमेज बना रहा है...")
+    try:
+        model = genai.ImageGenerationModel("imagen-3.0-generate-002")
+        result = model.generate_images(prompt=user_prompt, number_of_images=1, aspect_ratio="1:1")
         time.sleep(180) # हर 3 मिनट (180 सेकंड) में पिंग करेगा
 
 TELEGRAM_TOKEN = os.getenv("8289048381:AAEK1nlS30WcwMquRzQm9nOZ9bHWuXqtzCk

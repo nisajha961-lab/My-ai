@@ -6,13 +6,16 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 import google.generativeai as genai
 from PIL import Image
 
-# लॉगिंग सेटिंग्स
+# लॉबिंग सेटिंग्स (रेलवे लॉग्स के लिए)
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- यहाँ हमने सीधे तुम्हारे टोकन डाल दिए हैं, अब os.getenv का झंझट खत्म ---
+# --- तुम्हारे टोकन्स ---
 TELEGRAM_TOKEN = "8864000200:AAETXZ9l0VUwtZw8RHKm35eP5ONR5Met5L0"
 GEMINI_API_KEY = "AQ.Ab8RN6LVVLGdIB-Z1YtLPzEWlJ8rp2w0hR2CgWh9Ak9j8-zdBQ"
+
+# 🎯 तुम्हारी फिक्स टेलीग्राम आईडी (अब बोट सिर्फ तुम्हारे इशारों पर चलेगा)
+MY_TELEGRAM_ID = 8587752591
 
 # जेमिनी कॉन्फ़िगर करना
 genai.configure(api_key=GEMINI_API_KEY)
@@ -21,19 +24,90 @@ DEFAULT_INSTRUCTION = "You are Vansh AI, an advanced, witty assistant expert in 
 
 bot_personalities = {}
 chat_sessions = {}
-MY_TELEGRAM_ID = None 
 
 def is_authorized(update: Update) -> bool:
-    global MY_TELEGRAM_ID
     if not update.effective_user: return False
-    user_id = update.effective_user.id
-    if MY_TELEGRAM_ID is None:
-        MY_TELEGRAM_ID = user_id
-        return True
-    return user_id == MY_TELEGRAM_ID
+    # सुरक्षा चक्र: सिर्फ तुम्हारी आईडी मैच होने पर ही काम करेगा
+    return update.effective_user.id == MY_TELEGRAM_ID
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_authorized(update): 
+        logger.warning(f"Unauthorized access attempt by ID: {update.effective_user.id}")
+        return
+    user_id = update.effective_user.id
+    bot_personalities[user_id] = DEFAULT_INSTRUCTION
+    await update.message.reply_text("👋 नमस्ते बॉस! मैं Vansh AI हूँ। मैं तैयार हूँ!")
+
+async def set_personality(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_authorized(update): return
+    user_instruction = " ".join(context.args)
+    if not user_instruction:
+        await update.message.reply_text("निर्देश लिखें (उदा: /set_bot तुम एक कोडर हो)")
+        return
+    bot_personalities[update.effective_user.id] = user_instruction
+    if update.effective_user.id in chat_sessions: del chat_sessions[update.effective_user.id]
+    await update.message.reply_text(f"🎯 Vansh का मूड बदल गया: \"{user_instruction}\"")
+
+async def generate_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_authorized(update): return
+    user_prompt = " ".join(context.args)
+    if not user_prompt:
+        await update.message.reply_text("🎨 प्रॉम्ट लिखें।")
+        return
+    await update.message.reply_text("⏳ Vansh इमेज बना रहा है...")
+    try:
+        model = genai.ImageGenerationModel("imagen-3.0-generate-002")
+        result = model.generate_images(prompt=user_prompt, number_of_images=1, aspect_ratio="1:1")
+        for generated_image in result.generated_images:
+            image = Image.open(io.BytesIO(generated_image.image.image_bytes))
+            bio = io.BytesIO()
+            bio.name = 'vansh_image.png'
+            image.save(bio, 'PNG')
+            bio.seek(0)
+            await update.message.reply_photo(photo=bio, caption=f"✨ Vansh की कलाकृति: '{user_prompt}'")
+    except Exception as e:
+        logger.error(f"Image Generation Error: {e}")
+        await update.message.reply_text("❌ इमेज बनाने में एरर आया।")
+
+async def clear_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_authorized(update): return
+    if update.effective_user.id in chat_sessions: del chat_sessions[update.effective_user.id]
+    await update.message.reply_text("🔄 याददाश्त साफ कर दी गई है।")
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_authorized(update): return
+    user_id = update.effective_user.id
+    user_message = update.message.text
+    if user_id not in bot_personalities: bot_personalities[user_id] = DEFAULT_INSTRUCTION
+    if user_id not in chat_sessions:
+        model = genai.GenerativeModel(model_name="gemini-1.5-pro", system_instruction=bot_personalities[user_id])
+        chat_sessions[user_id] = model.start_chat(history=[])
+    try:
+        response = chat_sessions[user_id].send_message(user_message)
+        await update.message.reply_text(response.text, parse_mode="Markdown")
+    except Exception as e:
+        logger.error(f"Chat Error: {e}")
+        await update.message.reply_text("❌ एरर! /clear करें।")
+
+def main():
+    while True:
+        try:
+            logger.info("Starting Telegram Bot Polling (Secure Fixed ID Mode)...")
+            app_bot = Application.builder().token(TELEGRAM_TOKEN).build()
+            app_bot.add_handler(CommandHandler("start", start))
+            app_bot.add_handler(CommandHandler("set_bot", set_personality))
+            app_bot.add_handler(CommandHandler("generate_image", generate_image))
+            app_bot.add_handler(CommandHandler("clear", clear_history))
+            app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+            
+            app_bot.run_polling(allowed_updates=Update.ALL_TYPES, close_loop=False)
+        except Exception as crash_error:
+            # क्रैश होने की स्थिति में 5 सेकंड रुककर खुद दोबारा जिंदा होगा
+            logger.error(f"Critical error encountered: {crash_error}. Restarting bot in 5 seconds...")
+            time.sleep(5)
+
+if __name__ == "__main__":
+    main()
     user_id = update.effective_user.id
     bot_personalities[user_id] = DEFAULT_INSTRUCTION
     await update.message.reply_text("👋 नमस्ते बॉस! मैं Vansh AI हूँ। मैं तैयार हूँ!")

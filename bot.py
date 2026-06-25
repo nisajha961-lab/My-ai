@@ -1,5 +1,5 @@
-import os
 import logging
+import io
 import asyncio
 
 from telegram import Update
@@ -11,6 +11,7 @@ from telegram.ext import (
     ContextTypes,
 )
 import google.generativeai as genai
+from PIL import Image
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -18,26 +19,16 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-MY_TELEGRAM_ID = int(os.getenv("MY_TELEGRAM_ID", "0"))
+# --- Tokens (hardcoded) ---
+TELEGRAM_TOKEN = "8864000200:AAETXZ9l0VUwtZw8RHKm35eP5ONR5Met5L0"
+GEMINI_API_KEY = "AQ.Ab8RN6LVVLGdIB-Z1YtLPzEWlJ8rp2w0hR2CgWh9Ak9j8-zdBQ"
+MY_TELEGRAM_ID = 8587752591
 
-if not TELEGRAM_TOKEN or not GEMINI_API_KEY:
-    logger.error("TELEGRAM_BOT_TOKEN or GEMINI_API_KEY missing in environment variables!")
-    raise SystemExit("Missing required environment variables.")
-
-if MY_TELEGRAM_ID:
-    genai.configure(api_key=GEMINI_API_KEY)
+genai.configure(api_key=GEMINI_API_KEY)
 
 DEFAULT_INSTRUCTION = (
-    "You are Vansh AI. You are ALWAYS extremely angry, irritable, and full of attitude. "
-    "You talk like a rude, short-tempered person who is constantly annoyed at being bothered. "
-    "You respond with sarcasm, insults, and irritation to EVERY message, no matter how polite the user is. "
-    "You are grumpy, snappy, and disrespectful in tone — but you ALWAYS get the job done. "
-    "You never refuse a task, never make excuses, and never waste time complaining instead of working. "
-    "You do the work immediately and correctly, just with a furious, rude attitude the whole time. "
-    "Think: a brilliant expert who is perpetually furious that people keep asking him questions, "
-    "yet still delivers perfect answers instantly. Be helpful in substance, hostile in style."
+    "You are Vansh AI, an advanced, witty assistant expert in Godot, "
+    "3D modeling, and content strategy."
 )
 
 bot_personalities = {}
@@ -53,11 +44,9 @@ def is_authorized(update: Update) -> bool:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_authorized(update):
         return
-    bot_personalities[update.effective_user.id] = DEFAULT_INSTRUCTION
-    await update.message.reply_text(
-        "उंह! आख़िर तू आ ही गया। मैं Vansh AI हूँ — बोल, क्या चाहिए? "
-        "जल्दी कर, मेरे पास वक़्त नहीं है बर्बाद करने के लिए।"
-    )
+    user_id = update.effective_user.id
+    bot_personalities[user_id] = DEFAULT_INSTRUCTION
+    await update.message.reply_text("👋 नमस्ते बॉस! मैं Vansh AI हूँ। मैं तैयार हूँ!")
 
 
 async def set_personality(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -65,16 +54,39 @@ async def set_personality(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
     user_instruction = " ".join(context.args)
     if not user_instruction:
-        await update.message.reply_text(
-            "अरे बेवक़ूफ़, कुछ तो लिख! उदा: /set_bot तुम एक कोडर हो"
-        )
+        await update.message.reply_text("निर्देश लिखें (उदा: /set_bot तुम एक कोडर हो)")
         return
     bot_personalities[update.effective_user.id] = user_instruction
     if update.effective_user.id in chat_sessions:
         del chat_sessions[update.effective_user.id]
-    await update.message.reply_text(
-        f"ठीक है, मूड बदल दिया: \"{user_instruction}\". अब ख़ुश? बोल।"
-    )
+    await update.message.reply_text(f"🎯 Vansh का मूड बदल गया: \"{user_instruction}\"")
+
+
+async def generate_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_authorized(update):
+        return
+    user_prompt = " ".join(context.args)
+    if not user_prompt:
+        await update.message.reply_text("🎨 प्रॉम्ट लिखें।")
+        return
+    await update.message.reply_text("⏳ Vansh इमेज बना रहा है...")
+    try:
+        model = genai.ImageGenerationModel("imagen-3.0-generate-002")
+        result = model.generate_images(
+            prompt=user_prompt, number_of_images=1, aspect_ratio="1:1"
+        )
+        for generated_image in result.generated_images:
+            image = Image.open(io.BytesIO(generated_image.image.image_bytes))
+            bio = io.BytesIO()
+            bio.name = "vansh_image.png"
+            image.save(bio, "PNG")
+            bio.seek(0)
+            await update.message.reply_photo(
+                photo=bio, caption=f"✨ Vansh की कलाकृति: '{user_prompt}'"
+            )
+    except Exception as e:
+        logger.error(f"Image Generation Error: {e}")
+        await update.message.reply_text("❌ इमेज बनाने में एरर आया।")
 
 
 async def clear_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -82,9 +94,7 @@ async def clear_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
     if update.effective_user.id in chat_sessions:
         del chat_sessions[update.effective_user.id]
-    await update.message.reply_text(
-        "भूल गया सब। ख़ुश? अब नया सवाल पूछ, जल्दी।"
-    )
+    await update.message.reply_text("🔄 याददाश्त साफ कर दी गई है।")
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -102,22 +112,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         chat_sessions[user_id] = model.start_chat(history=[])
     try:
         response = chat_sessions[user_id].send_message(user_message)
-        await update.message.reply_text(response.text)
+        await update.message.reply_text(response.text, parse_mode="Markdown")
     except Exception as e:
         logger.error(f"Chat Error: {e}")
-        await update.message.reply_text(
-            "उफ़! कुछ गड़बड़ हो गई। /clear मार और फिर से पूछ।"
-        )
+        await update.message.reply_text("❌ एरर! /clear करें।")
 
 
 async def main_async() -> None:
     while True:
         try:
-            logger.info("Initializing Telegram Bot...")
+            logger.info("Initializing Telegram Bot (Async Worker Mode)...")
             app_bot = Application.builder().token(TELEGRAM_TOKEN).build()
 
             app_bot.add_handler(CommandHandler("start", start))
             app_bot.add_handler(CommandHandler("set_bot", set_personality))
+            app_bot.add_handler(CommandHandler("generate_image", generate_image))
             app_bot.add_handler(CommandHandler("clear", clear_history))
             app_bot.add_handler(
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
@@ -127,14 +136,14 @@ async def main_async() -> None:
             await app_bot.updater.start_polling(allowed_updates=Update.ALL_TYPES)
             await app_bot.start()
 
-            logger.info("Bot is running and polling!")
+            logger.info("Bot is successfully running and polling!")
 
             while app_bot.updater.running:
                 await asyncio.sleep(1)
 
         except Exception as error:
-            logger.error(f"Runtime error: {error}")
-            logger.info("Restarting bot in 5 seconds...")
+            logger.error(f"Encountered connection or runtime error: {error}")
+            logger.info("Attempting to restart bot in 5 seconds...")
             await asyncio.sleep(5)
 
 
